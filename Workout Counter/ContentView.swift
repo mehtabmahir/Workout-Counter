@@ -756,30 +756,27 @@ final class PreviewView: UIView {
         wrist: CGPoint?,
         into path: UIBezierPath
     ) {
-        guard let shoulder,
-              let elbow,
-              let wrist else {
-            return
+        let convertedShoulder = shoulder.map(convertToLayerPoint)
+        let convertedElbow = elbow.map(convertToLayerPoint)
+        let convertedWrist = wrist.map(convertToLayerPoint)
+
+        if let convertedShoulder,
+           let convertedElbow {
+            path.move(to: convertedShoulder)
+            path.addLine(to: convertedElbow)
         }
 
-        let convertedPoints = [shoulder, elbow, wrist].map { point in
-            // Vision reports portrait-oriented points, but the preview layer
-            // converts from the camera sensor's unrotated coordinate space.
-            let captureDevicePoint = CGPoint(
-                x: point.y,
-                y: 1 - point.x
-            )
-
-            return previewLayer.layerPointConverted(
-                fromCaptureDevicePoint: captureDevicePoint
-            )
+        if let convertedElbow,
+           let convertedWrist {
+            path.move(to: convertedElbow)
+            path.addLine(to: convertedWrist)
         }
 
-        path.move(to: convertedPoints[0])
-        path.addLine(to: convertedPoints[1])
-        path.addLine(to: convertedPoints[2])
-
-        for point in convertedPoints {
+        for point in [
+            convertedShoulder,
+            convertedElbow,
+            convertedWrist
+        ].compactMap({ $0 }) {
             path.move(
                 to: CGPoint(
                     x: point.x + 8,
@@ -795,6 +792,19 @@ final class PreviewView: UIView {
                 clockwise: true
             )
         }
+    }
+
+    private func convertToLayerPoint(_ point: CGPoint) -> CGPoint {
+        // Vision reports portrait-oriented points, but the preview layer
+        // converts from the camera sensor's unrotated coordinate space.
+        let captureDevicePoint = CGPoint(
+            x: point.y,
+            y: 1 - point.x
+        )
+
+        return previewLayer.layerPointConverted(
+            fromCaptureDevicePoint: captureDevicePoint
+        )
     }
 }
 
