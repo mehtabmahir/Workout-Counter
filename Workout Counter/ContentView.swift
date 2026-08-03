@@ -91,7 +91,8 @@ struct WorkoutView: View {
         ZStack {
             CameraPreview(
                 session: camera.session,
-                pose: camera.pose
+                pose: camera.pose,
+                selectedArm: curlCounter.selectedArm
             )
             .ignoresSafeArea()
 
@@ -669,6 +670,7 @@ final class CameraModel:
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
     let pose: ArmPose
+    let selectedArm: ExerciseArm?
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
@@ -689,15 +691,20 @@ struct CameraPreview: UIViewRepresentable {
         _ uiView: PreviewView,
         context: Context
     ) {
-        uiView.updatePose(pose)
+        uiView.updatePose(
+            pose,
+            selectedArm: selectedArm
+        )
     }
 }
 
 // MARK: - Pose Overlay
 
 final class PreviewView: UIView {
-    private let poseLayer = CAShapeLayer()
+    private let leftPoseLayer = CAShapeLayer()
+    private let rightPoseLayer = CAShapeLayer()
     private var pose = ArmPose.empty
+    private var selectedArm: ExerciseArm?
 
     override class var layerClass: AnyClass {
         AVCaptureVideoPreviewLayer.self
@@ -710,13 +717,11 @@ final class PreviewView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
 
-        poseLayer.strokeColor = UIColor.systemGreen.cgColor
-        poseLayer.fillColor = UIColor.clear.cgColor
-        poseLayer.lineWidth = 6
-        poseLayer.lineCap = .round
-        poseLayer.lineJoin = .round
+        configurePoseLayer(leftPoseLayer)
+        configurePoseLayer(rightPoseLayer)
 
-        layer.addSublayer(poseLayer)
+        layer.addSublayer(leftPoseLayer)
+        layer.addSublayer(rightPoseLayer)
     }
 
     required init?(coder: NSCoder) {
@@ -726,33 +731,85 @@ final class PreviewView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        poseLayer.frame = bounds
+        leftPoseLayer.frame = bounds
+        rightPoseLayer.frame = bounds
         drawPose()
     }
 
-    func updatePose(_ newPose: ArmPose) {
+    func updatePose(
+        _ newPose: ArmPose,
+        selectedArm: ExerciseArm?
+    ) {
         pose = newPose
+        self.selectedArm = selectedArm
         drawPose()
     }
 
     private func drawPose() {
-        let path = UIBezierPath()
+        let leftPath = UIBezierPath()
+        let rightPath = UIBezierPath()
 
         drawArm(
             shoulder: pose.leftShoulder,
             elbow: pose.leftElbow,
             wrist: pose.leftWrist,
-            into: path
+            into: leftPath
         )
 
         drawArm(
             shoulder: pose.rightShoulder,
             elbow: pose.rightElbow,
             wrist: pose.rightWrist,
-            into: path
+            into: rightPath
         )
 
-        poseLayer.path = path.cgPath
+        leftPoseLayer.path = leftPath.cgPath
+        rightPoseLayer.path = rightPath.cgPath
+        stylePoseLayers()
+    }
+
+    private func configurePoseLayer(_ poseLayer: CAShapeLayer) {
+        poseLayer.strokeColor = UIColor.systemGreen.cgColor
+        poseLayer.fillColor = UIColor.clear.cgColor
+        poseLayer.lineWidth = 6
+        poseLayer.lineCap = .round
+        poseLayer.lineJoin = .round
+    }
+
+    private func stylePoseLayers() {
+        guard let selectedArm else {
+            styleActive(leftPoseLayer)
+            styleActive(rightPoseLayer)
+            return
+        }
+
+        style(
+            leftPoseLayer,
+            isActive: selectedArm == .left
+        )
+        style(
+            rightPoseLayer,
+            isActive: selectedArm == .right
+        )
+    }
+
+    private func style(
+        _ poseLayer: CAShapeLayer,
+        isActive: Bool
+    ) {
+        if isActive {
+            styleActive(poseLayer)
+        } else {
+            poseLayer.strokeColor = UIColor.systemGray.cgColor
+            poseLayer.opacity = 0.22
+            poseLayer.lineWidth = 4
+        }
+    }
+
+    private func styleActive(_ poseLayer: CAShapeLayer) {
+        poseLayer.strokeColor = UIColor.systemGreen.cgColor
+        poseLayer.opacity = 1
+        poseLayer.lineWidth = 6
     }
 
     private func drawArm(
