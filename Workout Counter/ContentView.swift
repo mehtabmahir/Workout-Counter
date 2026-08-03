@@ -626,7 +626,12 @@ final class CameraModel:
             )
 
             session.beginConfiguration()
-            session.sessionPreset = .high
+
+            if session.canSetSessionPreset(.vga640x480) {
+                session.sessionPreset = .vga640x480
+            } else {
+                session.sessionPreset = .high
+            }
 
             guard session.canAddInput(input) else {
                 session.commitConfiguration()
