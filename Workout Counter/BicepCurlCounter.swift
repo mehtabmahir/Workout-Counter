@@ -34,9 +34,11 @@ final class BicepCurlCounter: ExerciseCounter {
         let time: TimeInterval
     }
 
-    private let extendedAngle: CGFloat = 145
-    private let armSelectionAngle: CGFloat = 135
-    private let flexedAngle: CGFloat = 80
+    // Use a forgiving range so camera perspective and natural partial motion
+    // do not require a perfectly straight or fully closed elbow.
+    private let extendedAngle: CGFloat = 130
+    private let armSelectionAngle: CGFloat = 120
+    private let flexedAngle: CGFloat = 100
     private let motionHistoryDuration = 0.6
     private let maximumInferenceAge = 0.4
     private let frameEdgeMargin: CGFloat = 0.22
