@@ -18,6 +18,12 @@ import UIKit
 // MARK: - Workout Screen
 
 struct WorkoutView: View {
+    private enum CompletionAction {
+        case repeatSet
+        case changeGoal
+        case finishWorkout
+    }
+
     @Environment(\.dismiss) private var dismiss
     @StateObject private var camera = CameraModel()
     @StateObject private var curlCounter = BicepCurlCounter()
@@ -27,9 +33,11 @@ struct WorkoutView: View {
     @State private var targetReps: Int?
     @State private var selectedTargetReps = 10
     @State private var showingRepGoal = false
+    @State private var showingWorkoutComplete = false
     @State private var showingRepCue = false
     @State private var goalCompleted = false
     @State private var isRepAudioEnabled = true
+    @State private var completionAction: CompletionAction?
     @State private var feedbackTask: Task<Void, Never>?
 
     var body: some View {
@@ -220,6 +228,27 @@ struct WorkoutView: View {
             .presentationDetents([.medium])
             .presentationDragIndicator(.visible)
         }
+        .fullScreenCover(
+            isPresented: $showingWorkoutComplete,
+            onDismiss: handleCompletionDismissal
+        ) {
+            WorkoutCompleteView(
+                repCount: targetReps ?? curlCounter.repCount,
+                onRepeatSet: {
+                    completionAction = .repeatSet
+                    showingWorkoutComplete = false
+                },
+                onChangeGoal: {
+                    completionAction = .changeGoal
+                    showingWorkoutComplete = false
+                },
+                onFinish: {
+                    completionAction = .finishWorkout
+                    showingWorkoutComplete = false
+                }
+            )
+            .interactiveDismissDisabled()
+        }
         .task {
             await camera.start()
         }
@@ -299,6 +328,31 @@ struct WorkoutView: View {
             isCounting = false
             goalCompleted = true
             curlCounter.resetMovement()
+            showingWorkoutComplete = true
+        }
+    }
+
+    private func handleCompletionDismissal() {
+        let action = completionAction
+        completionAction = nil
+
+        switch action {
+        case .repeatSet:
+            guard let targetReps else {
+                return
+            }
+
+            beginWorkout(target: targetReps)
+
+        case .changeGoal:
+            selectedTargetReps = targetReps ?? selectedTargetReps
+            showingRepGoal = true
+
+        case .finishWorkout:
+            dismiss()
+
+        case nil:
+            break
         }
     }
 
@@ -576,6 +630,133 @@ private struct RepGoalSheet: View {
                 .buttonStyle(.plain)
             }
             .padding(24)
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+private struct WorkoutCompleteView: View {
+    let repCount: Int
+    let onRepeatSet: () -> Void
+    let onChangeGoal: () -> Void
+    let onFinish: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color(red: 0.025, green: 0.035, blue: 0.055)
+                .ignoresSafeArea()
+
+            RadialGradient(
+                colors: [.green.opacity(0.20), .clear],
+                center: .top,
+                startRadius: 10,
+                endRadius: 430
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                Spacer()
+
+                ZStack {
+                    Circle()
+                        .fill(.green.opacity(0.12))
+                        .frame(width: 150, height: 150)
+
+                    Circle()
+                        .stroke(.green.opacity(0.28), lineWidth: 2)
+                        .frame(width: 150, height: 150)
+
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 58, weight: .black))
+                        .foregroundStyle(.green)
+                }
+
+                Text("SET COMPLETE")
+                    .font(.caption.bold())
+                    .tracking(3)
+                    .foregroundStyle(.green)
+                    .padding(.top, 28)
+
+                Text("Great work.")
+                    .font(.system(size: 42, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                    .padding(.top, 9)
+
+                Text("You completed \(repCount) reps.")
+                    .font(.title3)
+                    .foregroundStyle(.white.opacity(0.62))
+                    .padding(.top, 7)
+
+                Spacer()
+
+                VStack(spacing: 12) {
+                    Button(action: onRepeatSet) {
+                        HStack(spacing: 13) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.headline.bold())
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Start Another Set")
+                                    .font(.headline.bold())
+
+                                Text("Repeat the \(repCount)-rep goal")
+                                    .font(.caption)
+                                    .opacity(0.68)
+                            }
+
+                            Spacer()
+
+                            Image(systemName: "arrow.right")
+                                .font(.headline.bold())
+                        }
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 20)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 68)
+                        .background(.green)
+                        .clipShape(
+                            RoundedRectangle(
+                                cornerRadius: 21,
+                                style: .continuous
+                            )
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: onChangeGoal) {
+                        Text("Choose a Different Goal")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 58)
+                            .background(.white.opacity(0.10))
+                            .clipShape(
+                                RoundedRectangle(
+                                    cornerRadius: 19,
+                                    style: .continuous
+                                )
+                            )
+                            .overlay {
+                                RoundedRectangle(
+                                    cornerRadius: 19,
+                                    style: .continuous
+                                )
+                                .stroke(.white.opacity(0.10), lineWidth: 1)
+                            }
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: onFinish) {
+                        Text("Finish Workout")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.65))
+                            .frame(height: 44)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 20)
+            }
         }
         .preferredColorScheme(.dark)
     }
