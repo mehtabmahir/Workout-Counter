@@ -21,8 +21,16 @@ struct WorkoutView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var camera = CameraModel()
     @StateObject private var curlCounter = BicepCurlCounter()
+    @StateObject private var repCuePlayer = RepCuePlayer()
 
     @State private var isCounting = false
+    @State private var targetReps: Int?
+    @State private var selectedTargetReps = 10
+    @State private var showingRepGoal = false
+    @State private var showingRepCue = false
+    @State private var goalCompleted = false
+    @State private var isRepAudioEnabled = true
+    @State private var feedbackTask: Task<Void, Never>?
 
     var body: some View {
         ZStack {
@@ -59,10 +67,35 @@ struct WorkoutView: View {
 
                     Spacer()
 
-                    Text(isCounting ? "COUNTING" : "READY")
+                    Button {
+                        isRepAudioEnabled.toggle()
+                        repCuePlayer.setAudioEnabled(isRepAudioEnabled)
+                    } label: {
+                        Image(
+                            systemName: isRepAudioEnabled
+                                ? "speaker.wave.2.fill"
+                                : "speaker.slash.fill"
+                        )
+                        .font(.subheadline.bold())
+                        .foregroundStyle(
+                            isRepAudioEnabled ? .white : .white.opacity(0.55)
+                        )
+                        .frame(width: 44, height: 44)
+                        .background(.black.opacity(0.45))
+                        .clipShape(Circle())
+                    }
+                    .accessibilityLabel(
+                        isRepAudioEnabled
+                            ? "Mute rep audio"
+                            : "Turn on rep audio"
+                    )
+
+                    Text(workoutStatus)
                         .font(.caption.bold())
                         .tracking(2)
-                        .foregroundStyle(isCounting ? .green : .white)
+                        .foregroundStyle(
+                            isCounting || goalCompleted ? .green : .white
+                        )
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
                         .background(.black.opacity(0.45))
@@ -71,21 +104,69 @@ struct WorkoutView: View {
 
                 Spacer()
 
-                VStack(spacing: 0) {
-                    Text("\(curlCounter.repCount)")
-                        .font(
-                            .system(
-                                size: 100,
-                                weight: .black,
-                                design: .rounded
-                            )
-                        )
-                        .foregroundStyle(.white)
+                ZStack {
+                    Circle()
+                        .stroke(.green.opacity(0.75), lineWidth: 5)
+                        .frame(width: 190, height: 190)
+                        .scaleEffect(showingRepCue ? 1.15 : 0.82)
+                        .opacity(showingRepCue ? 0.9 : 0)
 
-                    Text("REPS")
-                        .font(.headline.bold())
-                        .tracking(4)
-                        .foregroundStyle(.white.opacity(0.75))
+                    VStack(spacing: 7) {
+                        ZStack(alignment: .topTrailing) {
+                            Text("\(curlCounter.repCount)")
+                                .font(
+                                    .system(
+                                        size: 100,
+                                        weight: .black,
+                                        design: .rounded
+                                    )
+                                )
+                                .foregroundStyle(
+                                    showingRepCue ? .green : .white
+                                )
+                                .scaleEffect(showingRepCue ? 1.08 : 1)
+
+                            if showingRepCue {
+                                Text("+1")
+                                    .font(.headline.bold())
+                                    .foregroundStyle(.green)
+                                    .offset(x: 28, y: 8)
+                                    .transition(.scale.combined(with: .opacity))
+                            }
+                        }
+
+                        Text("REPS")
+                            .font(.headline.bold())
+                            .tracking(4)
+                            .foregroundStyle(.white.opacity(0.75))
+
+                        if let targetReps {
+                            VStack(spacing: 7) {
+                                Text(
+                                    goalCompleted
+                                        ? "GOAL COMPLETE"
+                                        : "GOAL  \(targetReps)"
+                                )
+                                .font(.caption.bold())
+                                .tracking(1.5)
+                                .foregroundStyle(
+                                    goalCompleted
+                                        ? .green
+                                        : .white.opacity(0.7)
+                                )
+
+                                ProgressView(
+                                    value: Double(
+                                        min(curlCounter.repCount, targetReps)
+                                    ),
+                                    total: Double(targetReps)
+                                )
+                                .tint(.green)
+                                .frame(width: 150)
+                            }
+                            .padding(.top, 3)
+                        }
+                    }
                 }
 
                 Spacer()
@@ -93,6 +174,7 @@ struct WorkoutView: View {
                 HStack(spacing: 12) {
                     Button {
                         curlCounter.reset()
+                        goalCompleted = false
                     } label: {
                         Image(systemName: "arrow.counterclockwise")
                             .font(.title2.bold())
@@ -103,10 +185,9 @@ struct WorkoutView: View {
                     }
 
                     Button {
-                        isCounting.toggle()
-                        curlCounter.resetMovement()
+                        handlePrimaryButton()
                     } label: {
-                        Text(isCounting ? "Pause" : "Start Counting")
+                        Text(primaryButtonTitle)
                             .font(.headline.bold())
                             .frame(maxWidth: .infinity)
                             .frame(height: 60)
@@ -130,6 +211,15 @@ struct WorkoutView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        .sheet(isPresented: $showingRepGoal) {
+            RepGoalSheet(
+                selectedReps: $selectedTargetReps
+            ) { reps in
+                beginWorkout(target: reps)
+            }
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+        }
         .task {
             await camera.start()
         }
@@ -140,9 +230,354 @@ struct WorkoutView: View {
 
             curlCounter.process(pose)
         }
+        .onChange(of: curlCounter.repCount) { oldCount, newCount in
+            handleRepCountChange(from: oldCount, to: newCount)
+        }
         .onDisappear {
+            feedbackTask?.cancel()
+            repCuePlayer.stop()
             camera.stop()
         }
+    }
+
+    private var workoutStatus: String {
+        if goalCompleted {
+            return "COMPLETE"
+        }
+
+        return isCounting ? "COUNTING" : "READY"
+    }
+
+    private var primaryButtonTitle: String {
+        if isCounting {
+            return "Pause"
+        }
+
+        if goalCompleted {
+            return "New Set"
+        }
+
+        return targetReps == nil ? "Start Counting" : "Resume"
+    }
+
+    private func handlePrimaryButton() {
+        if isCounting {
+            isCounting = false
+            curlCounter.resetMovement()
+            return
+        }
+
+        if targetReps == nil || goalCompleted {
+            showingRepGoal = true
+        } else {
+            isCounting = true
+            curlCounter.resetMovement()
+        }
+    }
+
+    private func beginWorkout(target: Int) {
+        targetReps = target
+        goalCompleted = false
+        curlCounter.reset()
+        isCounting = true
+    }
+
+    private func handleRepCountChange(
+        from oldCount: Int,
+        to newCount: Int
+    ) {
+        guard newCount > oldCount else {
+            return
+        }
+
+        let completed = targetReps.map { newCount >= $0 } ?? false
+
+        playVisualRepCue()
+        repCuePlayer.play(rep: newCount, completedGoal: completed)
+
+        if completed {
+            isCounting = false
+            goalCompleted = true
+            curlCounter.resetMovement()
+        }
+    }
+
+    private func playVisualRepCue() {
+        feedbackTask?.cancel()
+
+        withAnimation(.none) {
+            showingRepCue = false
+        }
+
+        withAnimation(.spring(response: 0.22, dampingFraction: 0.55)) {
+            showingRepCue = true
+        }
+
+        feedbackTask = Task {
+            try? await Task.sleep(for: .milliseconds(550))
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            withAnimation(.easeOut(duration: 0.25)) {
+                showingRepCue = false
+            }
+        }
+    }
+}
+
+@MainActor
+final class RepCuePlayer: ObservableObject {
+    private let audioSession = AVAudioSession.sharedInstance()
+    private let repHaptic = UIImpactFeedbackGenerator(style: .medium)
+    private let completionHaptic = UINotificationFeedbackGenerator()
+    private var repPlayer: AVAudioPlayer?
+    private var completionPlayer: AVAudioPlayer?
+    private var isAudioEnabled = true
+
+    init() {
+        repPlayer = try? AVAudioPlayer(data: Self.makeRepSound())
+        completionPlayer = try? AVAudioPlayer(
+            data: Self.makeCompletionSound()
+        )
+        repPlayer?.prepareToPlay()
+        completionPlayer?.prepareToPlay()
+
+        repHaptic.prepare()
+        completionHaptic.prepare()
+    }
+
+    func setAudioEnabled(_ isEnabled: Bool) {
+        isAudioEnabled = isEnabled
+
+        if !isEnabled {
+            repPlayer?.stop()
+            completionPlayer?.stop()
+            try? audioSession.setActive(
+                false,
+                options: .notifyOthersOnDeactivation
+            )
+        }
+    }
+
+    func play(rep _: Int, completedGoal: Bool) {
+        if completedGoal {
+            completionHaptic.notificationOccurred(.success)
+        } else {
+            repHaptic.impactOccurred()
+        }
+
+        guard isAudioEnabled else {
+            prepareHaptics()
+            return
+        }
+
+        try? audioSession.setCategory(
+            .playback,
+            mode: .default,
+            options: [.mixWithOthers]
+        )
+        try? audioSession.setActive(true)
+
+        let player = completedGoal ? completionPlayer : repPlayer
+
+        repPlayer?.stop()
+        completionPlayer?.stop()
+        player?.currentTime = 0
+        player?.play()
+
+        prepareHaptics()
+    }
+
+    func stop() {
+        repPlayer?.stop()
+        completionPlayer?.stop()
+        try? audioSession.setActive(
+            false,
+            options: .notifyOthersOnDeactivation
+        )
+    }
+
+    private func prepareHaptics() {
+        repHaptic.prepare()
+        completionHaptic.prepare()
+    }
+
+    private static func makeRepSound() -> Data {
+        makeWaveData(duration: 0.34) { time in
+            let attack = min(time / 0.008, 1)
+            let decay = exp(-9 * time)
+            let fundamental = sin(2 * .pi * 1_175 * time)
+            let harmonic = sin(2 * .pi * 2_350 * time) * 0.28
+
+            return Float((fundamental + harmonic) * attack * decay * 0.42)
+        }
+    }
+
+    private static func makeCompletionSound() -> Data {
+        let notes: [(start: Double, frequency: Double)] = [
+            (0, 784),
+            (0.15, 988),
+            (0.30, 1_318)
+        ]
+
+        return makeWaveData(duration: 0.9) { time in
+            var sample = 0.0
+
+            for note in notes where time >= note.start {
+                let noteTime = time - note.start
+                let attack = min(noteTime / 0.008, 1)
+                let decay = exp(-5.5 * noteTime)
+                let fundamental = sin(
+                    2 * .pi * note.frequency * noteTime
+                )
+                let harmonic = sin(
+                    2 * .pi * note.frequency * 2 * noteTime
+                ) * 0.2
+
+                sample += (fundamental + harmonic) * attack * decay * 0.25
+            }
+
+            return Float(max(-1, min(1, sample)))
+        }
+    }
+
+    private static func makeWaveData(
+        duration: Double,
+        sample: (Double) -> Float
+    ) -> Data {
+        let sampleRate = 44_100
+        let sampleCount = Int(duration * Double(sampleRate))
+        let audioByteCount = sampleCount * MemoryLayout<Int16>.size
+
+        var data = Data()
+        data.reserveCapacity(44 + audioByteCount)
+
+        data.append(contentsOf: "RIFF".utf8)
+        append(UInt32(36 + audioByteCount), to: &data)
+        data.append(contentsOf: "WAVE".utf8)
+        data.append(contentsOf: "fmt ".utf8)
+        append(UInt32(16), to: &data)
+        append(UInt16(1), to: &data)
+        append(UInt16(1), to: &data)
+        append(UInt32(sampleRate), to: &data)
+        append(UInt32(sampleRate * 2), to: &data)
+        append(UInt16(2), to: &data)
+        append(UInt16(16), to: &data)
+        data.append(contentsOf: "data".utf8)
+        append(UInt32(audioByteCount), to: &data)
+
+        for frame in 0..<sampleCount {
+            let time = Double(frame) / Double(sampleRate)
+            let clampedSample = max(-1, min(1, sample(time)))
+            let integerSample = Int16(
+                (clampedSample * Float(Int16.max)).rounded()
+            )
+
+            append(integerSample, to: &data)
+        }
+
+        return data
+    }
+
+    private static func append<Value: FixedWidthInteger>(
+        _ value: Value,
+        to data: inout Data
+    ) {
+        var littleEndianValue = value.littleEndian
+
+        Swift.withUnsafeBytes(of: &littleEndianValue) { bytes in
+            data.append(contentsOf: bytes)
+        }
+    }
+}
+
+private struct RepGoalSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var selectedReps: Int
+
+    let onStart: (Int) -> Void
+
+    private let suggestedGoals = [8, 10, 12, 15]
+
+    var body: some View {
+        ZStack {
+            Color(red: 0.025, green: 0.035, blue: 0.055)
+                .ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Set your rep goal")
+                        .font(.title2.bold())
+
+                    Text("Choose how many bicep curls you want to complete.")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.62))
+                }
+
+                HStack(spacing: 10) {
+                    ForEach(suggestedGoals, id: \.self) { goal in
+                        Button {
+                            selectedReps = goal
+                        } label: {
+                            Text("\(goal)")
+                                .font(.headline.bold())
+                                .foregroundStyle(
+                                    selectedReps == goal ? .black : .white
+                                )
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 48)
+                                .background(
+                                    selectedReps == goal
+                                        ? .green
+                                        : .white.opacity(0.10)
+                                )
+                                .clipShape(
+                                    RoundedRectangle(
+                                        cornerRadius: 15,
+                                        style: .continuous
+                                    )
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                Stepper(value: $selectedReps, in: 1...100) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Custom goal")
+                            .font(.subheadline.weight(.semibold))
+
+                        Text("\(selectedReps) reps")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.62))
+                    }
+                }
+                .tint(.green)
+
+                Button {
+                    onStart(selectedReps)
+                    dismiss()
+                } label: {
+                    Text("Start Workout")
+                        .font(.headline.bold())
+                        .foregroundStyle(.black)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 56)
+                        .background(.green)
+                        .clipShape(
+                            RoundedRectangle(
+                                cornerRadius: 18,
+                                style: .continuous
+                            )
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(24)
+        }
+        .preferredColorScheme(.dark)
     }
 }
 
