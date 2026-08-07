@@ -28,10 +28,21 @@ final class BicepCurlCounter: ExerciseCounter {
         case waitingForFlexion
     }
 
+    private struct MotionSample {
+        let point: CGPoint
+        let angle: CGFloat
+        let time: TimeInterval
+    }
+
     private let extendedAngle: CGFloat = 145
-    private let armSelectionAngle: CGFloat = 125
+    private let armSelectionAngle: CGFloat = 135
     private let flexedAngle: CGFloat = 80
+    private let motionHistoryDuration = 0.6
+    private let maximumInferenceAge = 0.4
+    private let frameEdgeMargin: CGFloat = 0.22
+    private let minimumCurlAngleChange: CGFloat = 12
     private let requiredStableFrames = 3
+    private let requiredWristMissingFrames = 3
     private let maximumMissingFrames = 10
     private let minimumRepInterval = 0.5
 
@@ -44,15 +55,29 @@ final class BicepCurlCounter: ExerciseCounter {
     private var missingFrames = 0
     private var smoothedLeftAngle: CGFloat?
     private var smoothedRightAngle: CGFloat?
+    private var leftMotionHistory: [MotionSample] = []
+    private var rightMotionHistory: [MotionSample] = []
+    private var selectedWristMissingFrames = 0
     private var lastRepTime = -Double.infinity
 
     func process(_ pose: ArmPose) {
+        let measuredLeftAngle = pose.leftElbowAngle
+        let measuredRightAngle = pose.rightElbowAngle
+        let now = ProcessInfo.processInfo.systemUptime
+
+        recordMotionSamples(
+            from: pose,
+            leftAngle: measuredLeftAngle,
+            rightAngle: measuredRightAngle,
+            at: now
+        )
+
         let leftAngle = Self.smoothed(
-            pose.leftElbowAngle,
+            measuredLeftAngle,
             previous: &smoothedLeftAngle
         )
         let rightAngle = Self.smoothed(
-            pose.rightElbowAngle,
+            measuredRightAngle,
             previous: &smoothedRightAngle
         )
 
@@ -66,7 +91,8 @@ final class BicepCurlCounter: ExerciseCounter {
         case .waitingForFlexion:
             observeFlexions(
                 leftAngle: leftAngle,
-                rightAngle: rightAngle
+                rightAngle: rightAngle,
+                pose: pose
             )
         }
     }
@@ -87,6 +113,9 @@ final class BicepCurlCounter: ExerciseCounter {
         missingFrames = 0
         smoothedLeftAngle = nil
         smoothedRightAngle = nil
+        leftMotionHistory.removeAll()
+        rightMotionHistory.removeAll()
+        selectedWristMissingFrames = 0
         lastRepTime = -Double.infinity
     }
 
@@ -107,7 +136,8 @@ final class BicepCurlCounter: ExerciseCounter {
 
     private func observeFlexions(
         leftAngle: CGFloat?,
-        rightAngle: CGFloat?
+        rightAngle: CGFloat?,
+        pose: ArmPose
     ) {
         // Watch both extended arms only until one begins a clear curl.
         updateArmedArms(
@@ -116,13 +146,15 @@ final class BicepCurlCounter: ExerciseCounter {
         )
 
         selectArmIfNeeded(
-            leftAngle: leftAngle,
-            rightAngle: rightAngle
+            leftAngle: leftMotionHistory.last?.angle ?? leftAngle,
+            rightAngle: rightMotionHistory.last?.angle ?? rightAngle
         )
 
         guard let selectedArm else {
             return
         }
+
+        updateSelectedWristMissingFrames(using: pose)
 
         let hasVisibleArmedArm =
             selectedArm == .left
@@ -157,8 +189,16 @@ final class BicepCurlCounter: ExerciseCounter {
             rightFlexionFrames = 0
         }
 
-        guard leftFlexionFrames >= requiredStableFrames
-                || rightFlexionFrames >= requiredStableFrames else {
+        let completedWithVisibleWrist =
+            leftFlexionFrames >= requiredStableFrames
+            || rightFlexionFrames >= requiredStableFrames
+        let completedUsingMotionHistory = canCompleteFromMotionHistory(
+            pose: pose,
+            selectedArm: selectedArm
+        )
+
+        guard completedWithVisibleWrist
+                || completedUsingMotionHistory else {
             return
         }
 
@@ -180,6 +220,123 @@ final class BicepCurlCounter: ExerciseCounter {
         leftFlexionFrames = 0
         rightFlexionFrames = 0
         missingFrames = 0
+        leftMotionHistory.removeAll()
+        rightMotionHistory.removeAll()
+        selectedWristMissingFrames = 0
+    }
+
+    private func recordMotionSamples(
+        from pose: ArmPose,
+        leftAngle: CGFloat?,
+        rightAngle: CGFloat?,
+        at time: TimeInterval
+    ) {
+        if pose.leftWristIsDetected,
+           let point = pose.leftWrist,
+           let leftAngle {
+            leftMotionHistory.append(
+                MotionSample(
+                    point: point,
+                    angle: leftAngle,
+                    time: time
+                )
+            )
+        }
+
+        if pose.rightWristIsDetected,
+           let point = pose.rightWrist,
+           let rightAngle {
+            rightMotionHistory.append(
+                MotionSample(
+                    point: point,
+                    angle: rightAngle,
+                    time: time
+                )
+            )
+        }
+
+        let oldestAllowedTime = time - motionHistoryDuration
+        leftMotionHistory.removeAll { $0.time < oldestAllowedTime }
+        rightMotionHistory.removeAll { $0.time < oldestAllowedTime }
+    }
+
+    private func updateSelectedWristMissingFrames(using pose: ArmPose) {
+        let wristIsDetected = selectedArm == .left
+            ? pose.leftWristIsDetected
+            : pose.rightWristIsDetected
+
+        selectedWristMissingFrames = wristIsDetected
+            ? 0
+            : selectedWristMissingFrames + 1
+    }
+
+    private func canCompleteFromMotionHistory(
+        pose: ArmPose,
+        selectedArm: ExerciseArm
+    ) -> Bool {
+        guard selectedWristMissingFrames >= requiredWristMissingFrames else {
+            return false
+        }
+
+        let upperArmIsVisible = selectedArm == .left
+            ? pose.leftShoulder != nil && pose.leftElbow != nil
+            : pose.rightShoulder != nil && pose.rightElbow != nil
+
+        guard upperArmIsVisible else {
+            return false
+        }
+
+        let history = selectedArm == .left
+            ? leftMotionHistory
+            : rightMotionHistory
+
+        guard history.count >= 2,
+              let lastSample = history.last else {
+            return false
+        }
+
+        let now = ProcessInfo.processInfo.systemUptime
+
+        guard now - lastSample.time <= maximumInferenceAge,
+              isNearFrameEdge(lastSample.point) else {
+            return false
+        }
+
+        let largestRecentAngle = history.map(\.angle).max()
+            ?? extendedAngle
+        let observedAngleChange = max(
+            extendedAngle,
+            largestRecentAngle
+        ) - lastSample.angle
+
+        guard observedAngleChange >= minimumCurlAngleChange else {
+            return false
+        }
+
+        let comparisonSample = history.dropLast().suffix(5).first
+            ?? history[0]
+        let lastEdgeDistance = distanceToNearestEdge(lastSample.point)
+        let earlierEdgeDistance = distanceToNearestEdge(
+            comparisonSample.point
+        )
+        let clearlyAtEdge = lastEdgeDistance <= 0.08
+        let movedTowardEdge = lastEdgeDistance
+            <= earlierEdgeDistance - 0.015
+
+        return clearlyAtEdge || movedTowardEdge
+    }
+
+    private func isNearFrameEdge(_ point: CGPoint) -> Bool {
+        distanceToNearestEdge(point) <= frameEdgeMargin
+    }
+
+    private func distanceToNearestEdge(_ point: CGPoint) -> CGFloat {
+        min(
+            point.x,
+            1 - point.x,
+            point.y,
+            1 - point.y
+        )
     }
 
     private func selectArmIfNeeded(

@@ -15,69 +15,6 @@ struct MyApp: App {
 #if os(iOS)
 import UIKit
 
-// MARK: - Home Screen
-
-struct ContentView: View {
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                LinearGradient(
-                    colors: [
-                        .black,
-                        Color(red: 0.08, green: 0.12, blue: 0.18)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-
-                VStack(alignment: .leading, spacing: 24) {
-                    Spacer()
-
-                    Image(systemName: "figure.strengthtraining.traditional")
-                        .font(.system(size: 54))
-                        .foregroundStyle(.green)
-
-                    Text("Workout Counter")
-                        .font(.largeTitle.bold())
-                        .foregroundStyle(.white)
-
-                    Text("Choose a workout and let your camera count the reps.")
-                        .font(.title3)
-                        .foregroundStyle(.white.opacity(0.65))
-
-                    NavigationLink {
-                        WorkoutView()
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Bicep Curls")
-                                    .font(.title2.bold())
-
-                                Text("Start workout")
-                                    .foregroundStyle(.white.opacity(0.65))
-                            }
-
-                            Spacer()
-
-                            Image(systemName: "arrow.right")
-                                .font(.title2.bold())
-                        }
-                        .foregroundStyle(.white)
-                        .padding(22)
-                        .background(.white.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: 24))
-                    }
-
-                    Spacer()
-                }
-                .padding(24)
-            }
-            .toolbar(.hidden, for: .navigationBar)
-        }
-    }
-}
-
 // MARK: - Workout Screen
 
 struct WorkoutView: View {
@@ -224,6 +161,8 @@ struct ArmPose: Sendable {
 
     var leftArmConfidence: Float = 0
     var rightArmConfidence: Float = 0
+    var leftWristIsDetected = false
+    var rightWristIsDetected = false
 
     static let empty = ArmPose()
 
@@ -393,7 +332,9 @@ private struct PoseFilter {
             rightElbow: filteredRightElbow,
             rightWrist: filteredRightWrist,
             leftArmConfidence: leftArmConfidence,
-            rightArmConfidence: rightArmConfidence
+            rightArmConfidence: rightArmConfidence,
+            leftWristIsDetected: pose.leftWristIsDetected,
+            rightWristIsDetected: pose.rightWristIsDetected
         )
     }
 
@@ -491,20 +432,25 @@ final class PoseProcessor:
                     .min() ?? 0
             }
 
+            let leftWrist = location(for: .leftWrist)
+            let rightWrist = location(for: .rightWrist)
+
             let pose = ArmPose(
                 imageSize: imageSize,
                 leftShoulder: location(for: .leftShoulder),
                 leftElbow: location(for: .leftElbow),
-                leftWrist: location(for: .leftWrist),
+                leftWrist: leftWrist,
                 rightShoulder: location(for: .rightShoulder),
                 rightElbow: location(for: .rightElbow),
-                rightWrist: location(for: .rightWrist),
+                rightWrist: rightWrist,
                 leftArmConfidence: confidence(
                     for: [.leftShoulder, .leftElbow, .leftWrist]
                 ),
                 rightArmConfidence: confidence(
                     for: [.rightShoulder, .rightElbow, .rightWrist]
-                )
+                ),
+                leftWristIsDetected: leftWrist != nil,
+                rightWristIsDetected: rightWrist != nil
             )
 
             onPose?(pose)
